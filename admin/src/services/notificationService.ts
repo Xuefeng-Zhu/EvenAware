@@ -43,6 +43,7 @@ function subscribe(
         sourceName: data.sourceName ?? '',
         sourceType: data.sourceType ?? '',
         timestamp: data.timestamp ?? { seconds: 0, nanoseconds: 0 },
+        read: data.read ?? false,
       })
     })
 

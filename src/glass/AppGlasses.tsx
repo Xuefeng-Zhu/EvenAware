@@ -97,6 +97,7 @@ export function AppGlasses() {
     },
     selectNotification: (notification) => {
       setSelectedNotification(notification)
+      notificationStore.markAsRead(notification.id)
     },
   }
 

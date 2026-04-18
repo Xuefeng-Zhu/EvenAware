@@ -21,6 +21,8 @@ const VALID_SEVERITIES: ReadonlySet<string> = new Set<SeverityLevel>([
   'info',
 ])
 
+const READ_IDS_STORAGE_KEY = 'notification-hub:read-ids'
+
 /**
  * Validate a Firestore document against the Notification schema.
  * Returns a typed Notification if valid, or null if the document is malformed.
@@ -76,11 +78,45 @@ export class NotificationStore {
   /** Whether the Firestore listener is connected (not serving from cache) */
   isConnected = false
 
+  /** Set of notification IDs the user has marked as read */
+  readIds: Set<string> = new Set()
+
   /** Internal unsubscribe function from the onSnapshot listener */
   private unsubscribeFn: (() => void) | null = null
 
   /** Set of change listeners notified on every snapshot update */
   private listeners: Set<() => void> = new Set()
+
+  constructor() {
+    // Restore read IDs from localStorage
+    try {
+      const stored = localStorage.getItem(READ_IDS_STORAGE_KEY)
+      if (stored) {
+        const ids: string[] = JSON.parse(stored)
+        this.readIds = new Set(ids)
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  /**
+   * Mark a notification as read. It will be excluded from getFiltered results.
+   */
+  markAsRead(id: string): void {
+    this.readIds.add(id)
+    this.persistReadIds()
+    this.notifyListeners()
+  }
+
+  /** Persist read IDs to localStorage */
+  private persistReadIds(): void {
+    try {
+      localStorage.setItem(READ_IDS_STORAGE_KEY, JSON.stringify([...this.readIds]))
+    } catch {
+      // Ignore storage errors
+    }
+  }
 
   /**
    * Subscribe to the Firestore `notifications` collection.
@@ -143,8 +179,20 @@ export class NotificationStore {
    * Get notifications filtered by the given FilterState.
    * Applies severity and source filters client-side.
    */
-  getFiltered(filter: FilterState): Notification[] {
+  /**
+   * Get notifications filtered by the given FilterState.
+   * Applies read status, severity, and source filters client-side.
+   * @param readFilter - 'unread' (default), 'read', or 'all'
+   */
+  getFiltered(filter: FilterState, readFilter: 'unread' | 'read' | 'all' = 'unread'): Notification[] {
     let result = this.notifications
+
+    // Apply read status filter
+    if (readFilter === 'unread') {
+      result = result.filter((n) => !this.readIds.has(n.id))
+    } else if (readFilter === 'read') {
+      result = result.filter((n) => this.readIds.has(n.id))
+    }
 
     // Apply severity filter
     if (filter.severity === 'critical') {

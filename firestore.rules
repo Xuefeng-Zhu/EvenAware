@@ -2,15 +2,14 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Notifications: readable by anyone (glasses app), writable by Cloud Functions (admin SDK bypasses rules)
+    // Notifications: open read/write (admin app sends manually, glasses app reads)
     match /notifications/{notificationId} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if true;
     }
 
-    // Integrations: only authenticated users can read/write
+    // Integrations: open read/write (admin app manages these)
     match /integrations/{integrationId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if true;
     }
   }
 }

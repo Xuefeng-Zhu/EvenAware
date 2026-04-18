@@ -39,6 +39,9 @@ export interface Notification {
    * Uses a plain object shape compatible with both Firebase client and admin SDK Timestamps.
    */
   timestamp: { seconds: number; nanoseconds: number }
+
+  /** Whether the notification has been marked as read */
+  read?: boolean
 }
 
 /**
