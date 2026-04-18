@@ -39,24 +39,58 @@ const registry = new AdapterRegistry()
 registry.register(pagerDutyAdapter)
 registry.register(opsGenieAdapter)
 
+/** Shape of an integration document in the `integrations` Firestore collection. */
+export interface IntegrationDoc {
+  displayName: string
+  sourceType: string
+  description: string
+  authToken: string
+  enabled: boolean
+  webhookUrl: string
+  createdAt: FirebaseFirestore.Timestamp
+}
+
 /**
- * Validate the Authorization header against the configured webhook token.
- * Returns true if the token is valid, false otherwise.
+ * Look up the integration for a given sourceType and validate the bearer token.
+ * Returns the integration document if valid, or an error response object.
+ *
+ * Requirements: 11.1, 11.2, 11.3, 11.4, 5.4
  */
-function validateAuthToken(authHeader: string | undefined): boolean {
-  const expectedToken = process.env.WEBHOOK_AUTH_TOKEN
-  if (!expectedToken) {
-    // If no token is configured, reject all requests for safety
-    logger.warn("WEBHOOK_AUTH_TOKEN environment variable is not set")
-    return false
+export async function validateIntegrationAuth(
+  sourceType: string,
+  authHeader: string | undefined
+): Promise<
+  | { ok: true; integration: IntegrationDoc }
+  | { ok: false; status: number; error: string }
+> {
+  // Query integrations collection for matching sourceType
+  const snapshot = await db
+    .collection("integrations")
+    .where("sourceType", "==", sourceType)
+    .limit(1)
+    .get()
+
+  if (snapshot.empty) {
+    return { ok: false, status: 404, error: `No integration configured for source type: ${sourceType}` }
+  }
+
+  const doc = snapshot.docs[0]
+  const integration = doc.data() as IntegrationDoc
+
+  if (!integration.enabled) {
+    return { ok: false, status: 403, error: "Integration is disabled" }
   }
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return false
+    return { ok: false, status: 401, error: "Missing or invalid authorization header" }
   }
 
   const token = authHeader.slice("Bearer ".length)
-  return token === expectedToken
+  if (token !== integration.authToken) {
+    return { ok: false, status: 401, error: "Invalid authentication token" }
+  }
+
+  return { ok: true, integration }
 }
 
 /**
@@ -72,12 +106,13 @@ function truncate(value: string, maxLength: number): string {
 /**
  * HTTP-triggered Cloud Function: POST /webhooks/:sourceType
  *
- * 1. Validates auth token from Authorization: Bearer <token> header
- * 2. Looks up adapter by req.params.sourceType
- * 3. Calls adapter.parse(req.body)
- * 4. Normalizes: truncates title/body, validates severity, adds server timestamp
- * 5. Writes to Firestore notifications collection
- * 6. Responds with HTTP 200
+ * 1. Extracts sourceType from the URL path
+ * 2. Validates per-integration auth (Firestore lookup + bearer token check)
+ * 3. Looks up adapter by sourceType
+ * 4. Calls adapter.parse(req.body)
+ * 5. Normalizes: truncates title/body, validates severity, adds server timestamp
+ * 6. Writes to Firestore notifications collection
+ * 7. Responds with HTTP 200
  */
 export const handleWebhook = onRequest(async (req, res) => {
   // Only accept POST requests
@@ -86,14 +121,7 @@ export const handleWebhook = onRequest(async (req, res) => {
     return
   }
 
-  // 1. Validate auth token
-  const authHeader = req.headers.authorization
-  if (!validateAuthToken(authHeader)) {
-    res.status(401).json({ error: "Invalid or missing authentication token" })
-    return
-  }
-
-  // Extract sourceType from the URL path: /webhooks/:sourceType
+  // 1. Extract sourceType from the URL path: /webhooks/:sourceType
   // Cloud Functions v2 uses req.path, so we parse the sourceType from it
   const pathParts = req.path.split("/").filter(Boolean)
   // Expected path: /webhooks/:sourceType → ["webhooks", ":sourceType"]
@@ -103,14 +131,21 @@ export const handleWebhook = onRequest(async (req, res) => {
   }
   const sourceType = pathParts[1]
 
-  // 2. Look up adapter
+  // 2. Validate per-integration auth
+  const authResult = await validateIntegrationAuth(sourceType, req.headers.authorization)
+  if (!authResult.ok) {
+    res.status(authResult.status).json({ error: authResult.error })
+    return
+  }
+
+  // 3. Look up adapter
   const adapter = registry.get(sourceType)
   if (!adapter) {
     res.status(404).json({ error: `No adapter registered for source type: ${sourceType}` })
     return
   }
 
-  // 3. Parse the payload via the adapter
+  // 4. Parse the payload via the adapter
   let parsed
   try {
     parsed = adapter.parse(req.body)
@@ -126,7 +161,7 @@ export const handleWebhook = onRequest(async (req, res) => {
     return
   }
 
-  // 4. Normalize the parsed notification
+  // 5. Normalize the parsed notification
   const title = truncate(parsed.title, MAX_TITLE_LENGTH)
   const body = truncate(parsed.body, MAX_BODY_LENGTH)
   const severity = VALID_SEVERITIES.has(parsed.severity) ? parsed.severity : "info"
@@ -140,7 +175,7 @@ export const handleWebhook = onRequest(async (req, res) => {
     timestamp: admin.firestore.FieldValue.serverTimestamp(),
   }
 
-  // 5. Write to Firestore with auto-generated ID
+  // 6. Write to Firestore with auto-generated ID
   try {
     await db.collection("notifications").add(notificationData)
   } catch (err: unknown) {
@@ -150,6 +185,6 @@ export const handleWebhook = onRequest(async (req, res) => {
     return
   }
 
-  // 6. Respond with HTTP 200
+  // 7. Respond with HTTP 200
   res.status(200).json({ success: true })
 })

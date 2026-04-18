@@ -4,3 +4,10 @@ dist
 vite.config.d.ts
 vite.config.js
 functions/lib
+
+# Firebase
+.env
+admin/.env
+.firebase/
+firestore-debug.log
+ui-debug.log

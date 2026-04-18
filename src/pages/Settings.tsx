@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  AppShell,
-  NavHeader,
   ScreenHeader,
   Card,
   ListItem,
@@ -37,50 +35,73 @@ export function Settings() {
   }, [])
 
   const copyToClipboard = useCallback(async (text: string, sourceType: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
+    let success = false
+
+    // Try the modern Clipboard API first (requires secure context)
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+        success = true
+      } catch {
+        // Falls through to legacy fallback
+      }
+    }
+
+    // Legacy fallback for non-secure contexts (e.g. http://127.0.0.1)
+    if (!success) {
+      try {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        success = document.execCommand('copy')
+        document.body.removeChild(textarea)
+      } catch {
+        console.warn('[Settings] Clipboard copy failed')
+      }
+    }
+
+    if (success) {
       setCopiedType(sourceType)
       setTimeout(() => setCopiedType(null), 2000)
-    } catch {
-      console.warn('[Settings] Clipboard API not available')
     }
   }, [])
 
   return (
-    <AppShell header={<NavHeader title="Notification Hub" />}>
-      <div className="px-3 pt-4 pb-8 space-y-3">
-        <ScreenHeader title="Settings" />
+    <div className="px-3 pt-4 pb-8 space-y-3">
+      <ScreenHeader title="Settings" />
 
-        {/* Connection Status */}
-        <Card>
+      {/* Connection Status */}
+      <Card>
+        <ListItem
+          title="Firestore Connection"
+          subtitle={isConnected ? 'Connected' : 'Disconnected'}
+          trailing={<StatusDot connected={isConnected} />}
+        />
+      </Card>
+
+      {/* Configured Webhook Sources */}
+      <SectionHeader title="Webhook Sources" />
+      <Card>
+        {WEBHOOK_SOURCES.map((source) => (
           <ListItem
-            title="Firestore Connection"
-            subtitle={isConnected ? 'Connected' : 'Disconnected'}
-            trailing={<StatusDot connected={isConnected} />}
+            key={source.type}
+            title={source.name}
+            subtitle={source.webhookUrl}
+            trailing={
+              <Button
+                size="sm"
+                variant="highlight"
+                onClick={() => copyToClipboard(source.webhookUrl, source.type)}
+              >
+                {copiedType === source.type ? 'Copied' : 'Copy'}
+              </Button>
+            }
           />
-        </Card>
-
-        {/* Configured Webhook Sources */}
-        <SectionHeader title="Webhook Sources" />
-        <Card>
-          {WEBHOOK_SOURCES.map((source) => (
-            <ListItem
-              key={source.type}
-              title={source.name}
-              subtitle={source.webhookUrl}
-              trailing={
-                <Button
-                  size="sm"
-                  variant="highlight"
-                  onClick={() => copyToClipboard(source.webhookUrl, source.type)}
-                >
-                  {copiedType === source.type ? 'Copied' : 'Copy'}
-                </Button>
-              }
-            />
-          ))}
-        </Card>
-      </div>
-    </AppShell>
+        ))}
+      </Card>
+    </div>
   )
 }
